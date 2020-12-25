@@ -1,21 +1,47 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::env;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem::size_of;
 
-use libc::{c_char, c_int, c_void, dev_t, flock, mode_t, off_t, size_t, stat, ENOSYS};
+use libc::{c_char, c_int, c_void, dev_t, flock, mode_t, off_t, size_t, stat};
 
 mod filesystem;
 mod fuse;
 mod utils;
 
 pub use crate::filesystem::FileSystem;
-pub use crate::fuse::FuseAttr;
 use crate::fuse::{
-    fuse_reply_err, fuse_req_userdata, fuse_session_destroy, fuse_session_loop, fuse_session_mount,
-    fuse_session_new, fuse_session_unmount, FuseArgs, FuseBufvec, FuseConnInfo, FuseFileInfo,
-    FuseForgetData, FuseLowLevelOps, FusePollhandle, FuseReq,
+    fuse_reply_attr, fuse_reply_bmap, fuse_reply_buf, fuse_reply_create, fuse_reply_entry,
+    fuse_reply_err, fuse_reply_lock, fuse_reply_lseek, fuse_reply_none, fuse_reply_open,
+    fuse_reply_poll, fuse_reply_readlink, fuse_reply_statfs, fuse_reply_write, fuse_reply_xattr,
+    fuse_req_ctx, fuse_req_userdata, fuse_session_destroy, fuse_session_loop, fuse_session_mount,
+    fuse_session_new, fuse_session_unmount, FuseArgs, FuseConnInfo, FuseLowLevelOps, FuseReq,
 };
+pub use crate::fuse::{
+    FuseAttr, FuseBufvec, FuseCtx, FuseEntryParam, FuseFileInfo, FuseForgetData, FuseLock,
+    FusePollhandle, FuseStatvfs,
+};
+
+macro_rules! filesystem {
+    ($req:expr) => {
+        unsafe {
+            let userdata = fuse_req_userdata($req);
+            (userdata as *mut T).as_mut().unwrap()
+        }
+    };
+}
+
+macro_rules! ctx {
+    ($req:expr) => {
+        unsafe { fuse_req_ctx($req).as_ref().unwrap() }
+    };
+}
+
+macro_rules! to_str {
+    ($char:expr) => {
+        CStr::from_ptr($char).to_str().unwrap()
+    };
+}
 
 impl FuseLowLevelOps {
     pub fn new<T: FileSystem>() -> FuseLowLevelOps {
@@ -56,7 +82,7 @@ impl FuseLowLevelOps {
             bmap: FuseLowLevelOps::bmap::<T>,
             poll: FuseLowLevelOps::poll::<T>,
             write_buf: FuseLowLevelOps::write_buf::<T>,
-            retrieve_reply: FuseLowLevelOps::retrieve_reply::<T>,
+            // retrieve_reply: FuseLowLevelOps::retrieve_reply::<T>,
             forget_multi: FuseLowLevelOps::forget_multi::<T>,
             flock: FuseLowLevelOps::flock::<T>,
             fallocate: FuseLowLevelOps::fallocate::<T>,
@@ -66,47 +92,39 @@ impl FuseLowLevelOps {
         }
     }
     pub fn init<T: FileSystem>(userdata: *mut c_void, _conn: *mut FuseConnInfo) {
-        let file_system = userdata as *mut T;
-        unsafe {
-            let _ = file_system.as_mut().unwrap().init();
-        }
+        let file_system = unsafe { (userdata as *mut T).as_mut().unwrap() };
+        let _ = file_system.init();
     }
     pub fn destroy<T: FileSystem>(userdata: *mut c_void) {
-        let file_system = userdata as *mut T;
+        let file_system = unsafe { (userdata as *mut T).as_mut().unwrap() };
+        let _ = file_system.destroy();
+    }
+    pub fn lookup<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.lookup(ctx, parent, unsafe { to_str!(name) }) {
+            Ok(entry_param) => unsafe {
+                let _ret = fuse_reply_entry(req, entry_param.borrow());
+            },
+            Err(e) => unsafe {
+                fuse_reply_err(req, e);
+            },
+        }
+    }
+    pub fn forget<T: FileSystem>(req: *mut FuseReq, ino: u64, nlookup: u64) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        file_system.forget(ctx, ino, nlookup);
         unsafe {
-            let _ = file_system.as_mut().unwrap().destroy();
+            fuse_reply_none(req);
         }
     }
-    pub fn lookup<T: FileSystem>(req: *mut FuseReq, _parent: u64, _name: *const c_char) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().lookup() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
-            Err(e) => unsafe {
-                fuse_reply_err(req, e);
-            },
-        }
-    }
-    pub fn forget<T: FileSystem>(req: *mut FuseReq, _ino: u64, _nlookup: u64) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().forget() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
-            Err(e) => unsafe {
-                fuse_reply_err(req, e);
-            },
-        }
-    }
-    pub fn getattr<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().getattr() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn getattr<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.getattr(ctx, ino, unsafe { fi.as_mut() }) {
+            Ok((attr, timeout)) => unsafe {
+                let _ret = fuse_reply_attr(req, attr.convert().borrow(), timeout);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -115,28 +133,34 @@ impl FuseLowLevelOps {
     }
     pub fn setattr<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _attr: *mut stat,
-        _to_set: i16,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        attr: *mut stat,
+        to_set: i16,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().setattr() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.setattr(
+            ctx,
+            ino,
+            &FuseAttr::new(unsafe { attr.as_ref().unwrap() }),
+            to_set,
+            unsafe { fi.as_mut() },
+        ) {
+            Ok((attr, timeout)) => unsafe {
+                let _ret = fuse_reply_attr(req, attr.convert().borrow(), timeout);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn readlink<T: FileSystem>(req: *mut FuseReq, _ino: u64) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().readlink() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn readlink<T: FileSystem>(req: *mut FuseReq, ino: u64) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.readlink(ctx, ino) {
+            Ok(link) => unsafe {
+                let _ret = fuse_reply_readlink(req, CString::new(link).unwrap().as_ptr());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -145,58 +169,49 @@ impl FuseLowLevelOps {
     }
     pub fn mknod<T: FileSystem>(
         req: *mut FuseReq,
-        _parent: u64,
-        _name: *const c_char,
-        _mode: mode_t,
-        _rdev: dev_t,
+        parent: u64,
+        name: *const c_char,
+        mode: mode_t,
+        rdev: dev_t,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().mknod() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.mknod(ctx, parent, unsafe { to_str!(name) }, mode, rdev) {
+            Ok(entry_param) => unsafe {
+                let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn mkdir<T: FileSystem>(
-        req: *mut FuseReq,
-        _parent: u64,
-        _name: *const c_char,
-        _mode: mode_t,
-    ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().mkdir() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn mkdir<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char, mode: mode_t) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.mkdir(ctx, parent, unsafe { to_str!(name) }, mode) {
+            Ok(entry_param) => unsafe {
+                let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn unlink<T: FileSystem>(req: *mut FuseReq, _parent: u64, _name: *const c_char) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().unlink() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn unlink<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.unlink(ctx, parent, unsafe { to_str!(name) }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn rmdir<T: FileSystem>(req: *mut FuseReq, _parent: u64, _name: *const c_char) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().rmdir() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn rmdir<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.rmdir(ctx, parent, unsafe { to_str!(name) }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -204,15 +219,17 @@ impl FuseLowLevelOps {
     }
     pub fn symlink<T: FileSystem>(
         req: *mut FuseReq,
-        _link: *const c_char,
-        _parent: u64,
-        _name: *const c_char,
+        link: *const c_char,
+        parent: u64,
+        name: *const c_char,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().symlink() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.symlink(ctx, unsafe { to_str!(link) }, parent, unsafe {
+            to_str!(name)
+        }) {
+            Ok(entry_param) => unsafe {
+                let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -221,18 +238,23 @@ impl FuseLowLevelOps {
     }
     pub fn rename<T: FileSystem>(
         req: *mut FuseReq,
-        _parent: u64,
-        _name: *const c_char,
-        _newparent: u64,
-        _newname: *const c_char,
-        _flags: u16,
+        parent: u64,
+        name: *const c_char,
+        newparent: u64,
+        newname: *const c_char,
+        flags: u16,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().rename() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.rename(
+            ctx,
+            parent,
+            unsafe { to_str!(name) },
+            newparent,
+            unsafe { to_str!(newname) },
+            flags,
+        ) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -240,27 +262,27 @@ impl FuseLowLevelOps {
     }
     pub fn link<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _newparent: u64,
-        _newname: *const c_char,
+        ino: u64,
+        newparent: u64,
+        newname: *const c_char,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().link() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.link(ctx, ino, newparent, unsafe { to_str!(newname) }) {
+            Ok(entry_param) => unsafe {
+                let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn open<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().open() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn open<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.open(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
+            Ok(fi) => unsafe {
+                let _ret = fuse_reply_open(req, fi.borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -269,16 +291,17 @@ impl FuseLowLevelOps {
     }
     pub fn read<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _size: size_t,
-        _off: off_t,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        size: size_t,
+        off: off_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().read() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.read(ctx, ino, size, off, unsafe { fi.as_mut().unwrap() }) {
+            Ok(message) => unsafe {
+                let buf = CString::new(message).unwrap();
+                let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -287,42 +310,40 @@ impl FuseLowLevelOps {
     }
     pub fn write<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _buf: *const c_char,
-        _size: size_t,
-        _off: off_t,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        buf: *const c_char,
+        size: size_t,
+        off: off_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().write() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.write(ctx, ino, unsafe { to_str!(buf) }, size, off, unsafe {
+            fi.as_mut().unwrap()
+        }) {
+            Ok(count) => unsafe {
+                let _ret = fuse_reply_write(req, count);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn flush<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().flush() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn flush<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.flush(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn release<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().release() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn release<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.release(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -330,27 +351,25 @@ impl FuseLowLevelOps {
     }
     pub fn fsync<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _datasync: c_int,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        datasync: c_int,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().fsync() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.fsync(ctx, ino, datasync, unsafe { fi.as_mut().unwrap() }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn opendir<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().opendir() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn opendir<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.opendir(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
+            Ok(fi) => unsafe {
+                let _ret = fuse_reply_open(req, fi.borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -359,29 +378,28 @@ impl FuseLowLevelOps {
     }
     pub fn readdir<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _size: size_t,
-        _off: off_t,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        size: size_t,
+        off: off_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().readdir() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.readdir(ctx, ino, size, off, unsafe { fi.as_mut().unwrap() }) {
+            Ok(message) => unsafe {
+                let buf = CString::new(message).unwrap();
+                let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn releasedir<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().releasedir() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn releasedir<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.releasedir(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -389,27 +407,25 @@ impl FuseLowLevelOps {
     }
     pub fn fsyncdir<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _datasync: c_int,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        datasync: c_int,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().fsyncdir() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.fsyncdir(ctx, ino, datasync, unsafe { fi.as_mut().unwrap() }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn statfs<T: FileSystem>(req: *mut FuseReq, _ino: u64) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().statfs() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn statfs<T: FileSystem>(req: *mut FuseReq, ino: u64) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.statfs(ctx, ino) {
+            Ok(stbuf) => unsafe {
+                let _ret = fuse_reply_statfs(req, stbuf.convert().borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -418,71 +434,77 @@ impl FuseLowLevelOps {
     }
     pub fn setxattr<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _name: *const c_char,
-        _value: *const c_char,
-        _size: size_t,
-        _flags: c_int,
+        ino: u64,
+        name: *const c_char,
+        value: *const c_char,
+        size: size_t,
+        flags: c_int,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().setxattr() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.setxattr(
+            ctx,
+            ino,
+            unsafe { to_str!(name) },
+            unsafe { to_str!(value) },
+            size,
+            flags,
+        ) {
+            Ok(..) => {}
+            Err(e) => unsafe {
+                fuse_reply_err(req, e);
+            },
+        }
+    }
+    pub fn getxattr<T: FileSystem>(req: *mut FuseReq, ino: u64, name: *const c_char, size: size_t) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.getxattr(ctx, ino, unsafe { to_str!(name) }, size) {
+            Ok(message) => unsafe {
+                if size == 0 {
+                    let _ret = fuse_reply_xattr(req, size);
+                } else {
+                    let buf = CString::new(message).unwrap();
+                    let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
+                }
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn getxattr<T: FileSystem>(
-        req: *mut FuseReq,
-        _ino: u64,
-        _name: *const c_char,
-        _size: size_t,
-    ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().getxattr() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn listxattr<T: FileSystem>(req: *mut FuseReq, ino: u64, size: size_t) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.listxattr(ctx, ino, size) {
+            Ok(message) => unsafe {
+                if size == 0 {
+                    let _ret = fuse_reply_xattr(req, size);
+                } else {
+                    let buf = CString::new(message).unwrap();
+                    let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
+                }
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn listxattr<T: FileSystem>(req: *mut FuseReq, _ino: u64, _size: size_t) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().listxattr() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn removexattr<T: FileSystem>(req: *mut FuseReq, ino: u64, name: *const c_char) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.removexattr(ctx, ino, unsafe { to_str!(name) }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn removexattr<T: FileSystem>(req: *mut FuseReq, _ino: u64, _name: *const c_char) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().removexattr() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
-            Err(e) => unsafe {
-                fuse_reply_err(req, e);
-            },
-        }
-    }
-    pub fn access<T: FileSystem>(req: *mut FuseReq, _ino: u64, _mask: c_int) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().access() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn access<T: FileSystem>(req: *mut FuseReq, ino: u64, mask: c_int) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.access(ctx, ino, mask) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -490,16 +512,18 @@ impl FuseLowLevelOps {
     }
     pub fn create<T: FileSystem>(
         req: *mut FuseReq,
-        _parent: u64,
-        _name: *const c_char,
-        _mode: mode_t,
-        _fi: *mut FuseFileInfo,
+        parent: u64,
+        name: *const c_char,
+        mode: mode_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().create() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.create(ctx, parent, unsafe { to_str!(name) }, mode, unsafe {
+            fi.as_mut().unwrap()
+        }) {
+            Ok(entry_param) => unsafe {
+                let _ret = fuse_reply_create(req, entry_param.borrow(), fi.as_ref().unwrap());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -508,15 +532,20 @@ impl FuseLowLevelOps {
     }
     pub fn getlk<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _fi: *mut FuseFileInfo,
-        _lock: *mut flock,
+        ino: u64,
+        fi: *mut FuseFileInfo,
+        lock: *mut flock,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().getlk() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.getlk(
+            ctx,
+            ino,
+            unsafe { fi.as_mut().unwrap() },
+            &mut FuseLock::new(unsafe { lock.as_ref().unwrap() }),
+        ) {
+            Ok(lock) => unsafe {
+                let _ret = fuse_reply_lock(req, lock.convert().borrow());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -525,28 +554,32 @@ impl FuseLowLevelOps {
     }
     pub fn setlk<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _fi: *mut FuseFileInfo,
-        _lock: *mut flock,
-        _sleep: c_int,
+        ino: u64,
+        fi: *mut FuseFileInfo,
+        lock: *mut flock,
+        sleep: c_int,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().setlk() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.setlk(
+            ctx,
+            ino,
+            unsafe { fi.as_mut().unwrap() },
+            &mut FuseLock::new(unsafe { lock.as_ref().unwrap() }),
+            sleep,
+        ) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn bmap<T: FileSystem>(req: *mut FuseReq, _ino: u64, _blocksize: size_t, _idx: u64) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().bmap() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+    pub fn bmap<T: FileSystem>(req: *mut FuseReq, ino: u64, blocksize: size_t, idx: u64) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.bmap(ctx, ino, blocksize, idx) {
+            Ok(idx) => unsafe {
+                let _ret = fuse_reply_bmap(req, idx);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -555,15 +588,17 @@ impl FuseLowLevelOps {
     }
     pub fn poll<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _fi: *mut FuseFileInfo,
-        _ph: *mut FusePollhandle,
+        ino: u64,
+        fi: *mut FuseFileInfo,
+        ph: *mut FusePollhandle,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().poll() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.poll(ctx, ino, unsafe { fi.as_mut().unwrap() }, unsafe {
+            ph.as_mut().unwrap()
+        }) {
+            Ok(revents) => unsafe {
+                let _ret = fuse_reply_poll(req, revents);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -572,63 +607,53 @@ impl FuseLowLevelOps {
     }
     pub fn write_buf<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _bufv: *mut FuseBufvec,
-        _off: off_t,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        bufv: *mut FuseBufvec,
+        off: off_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().write_buf() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.write_buf(ctx, ino, unsafe { bufv.as_mut().unwrap() }, off, unsafe {
+            fi.as_mut().unwrap()
+        }) {
+            Ok(count) => unsafe {
+                let _ret = fuse_reply_write(req, count);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
         }
     }
-    pub fn retrieve_reply<T: FileSystem>(
-        req: *mut FuseReq,
-        _cookie: *mut c_void,
-        _ino: u64,
-        _off: off_t,
-        _bufv: *mut FuseBufvec,
-    ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().retrieve_reply() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
-            Err(e) => unsafe {
-                fuse_reply_err(req, e);
-            },
-        }
-    }
+    // pub fn retrieve_reply<T: FileSystem>(
+    //     req: *mut FuseReq,
+    //     _cookie: *mut c_void,
+    //     _ino: u64,
+    //     _off: off_t,
+    //     _bufv: *mut FuseBufvec,
+    // ) {
+    //     let file_system = filesystem!(req);
+    //     let ctx = ctx!(req);
+    //     file_system.retrieve_reply(ctx, ...);
+    //     fuse_reply_none(req);
+    // }
     pub fn forget_multi<T: FileSystem>(
         req: *mut FuseReq,
-        _count: size_t,
-        _forgets: *mut FuseForgetData,
+        count: size_t,
+        forgets: *mut FuseForgetData,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().forget_multi() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
-            Err(e) => unsafe {
-                fuse_reply_err(req, e);
-            },
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        file_system.forget_multi(ctx, count, unsafe { forgets.as_mut().unwrap() });
+        unsafe {
+            fuse_reply_none(req);
         }
     }
-    pub fn flock<T: FileSystem>(req: *mut FuseReq, _ino: u64, _fi: *mut FuseFileInfo, _op: c_int) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().flock() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+    pub fn flock<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo, op: c_int) {
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.flock(ctx, ino, unsafe { fi.as_mut().unwrap() }, op) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -636,18 +661,18 @@ impl FuseLowLevelOps {
     }
     pub fn fallocate<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _mode: c_int,
-        _offset: off_t,
-        _length: off_t,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        mode: c_int,
+        offset: off_t,
+        length: off_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().fallocate() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
-            },
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.fallocate(ctx, ino, mode, offset, length, unsafe {
+            fi.as_mut().unwrap()
+        }) {
+            Ok(..) => {}
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -655,16 +680,17 @@ impl FuseLowLevelOps {
     }
     pub fn readdirplus<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _size: size_t,
-        _off: off_t,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        size: size_t,
+        off: off_t,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().readdirplus() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.readdirplus(ctx, ino, size, off, unsafe { fi.as_mut().unwrap() }) {
+            Ok(message) => unsafe {
+                let buf = CString::new(message).unwrap();
+                let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -673,20 +699,30 @@ impl FuseLowLevelOps {
     }
     pub fn copy_file_range<T: FileSystem>(
         req: *mut FuseReq,
-        _ino_in: u64,
-        _off_in: off_t,
-        _fi_in: *mut FuseFileInfo,
-        _ino_out: u64,
-        _off_out: off_t,
-        _fi_out: *mut FuseFileInfo,
-        _len: size_t,
-        _flags: c_int,
+        ino_in: u64,
+        off_in: off_t,
+        fi_in: *mut FuseFileInfo,
+        ino_out: u64,
+        off_out: off_t,
+        fi_out: *mut FuseFileInfo,
+        len: size_t,
+        flags: c_int,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().copy_file_range() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.copy_file_range(
+            ctx,
+            ino_in,
+            off_in,
+            unsafe { fi_in.as_mut().unwrap() },
+            ino_out,
+            off_out,
+            unsafe { fi_out.as_mut().unwrap() },
+            len,
+            flags,
+        ) {
+            Ok(count) => unsafe {
+                let _ret = fuse_reply_write(req, count);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -695,16 +731,16 @@ impl FuseLowLevelOps {
     }
     pub fn lseek<T: FileSystem>(
         req: *mut FuseReq,
-        _ino: u64,
-        _off: off_t,
-        _whence: c_int,
-        _fi: *mut FuseFileInfo,
+        ino: u64,
+        off: off_t,
+        whence: c_int,
+        fi: *mut FuseFileInfo,
     ) {
-        let userdata = unsafe { fuse_req_userdata(req) };
-        let file_system = userdata as *mut T;
-        match unsafe { file_system.as_mut().unwrap().lseek() } {
-            Ok(..) => unsafe {
-                fuse_reply_err(req, ENOSYS);
+        let file_system = filesystem!(req);
+        let ctx = ctx!(req);
+        match file_system.lseek(ctx, ino, off, whence, unsafe { fi.as_mut().unwrap() }) {
+            Ok(off) => unsafe {
+                let _ret = fuse_reply_lseek(req, off);
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);

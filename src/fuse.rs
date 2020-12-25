@@ -1,9 +1,10 @@
 use std::mem;
 
 use libc::{
-    blkcnt_t, blksize_t, c_char, c_int, c_uint, c_void, dev_t, flock, gid_t, ino_t, iovec, mode_t,
-    nlink_t, off_t, pid_t, size_t, stat, statvfs, time_t, uid_t, ENOSYS,
+    blkcnt_t, blksize_t, c_char, c_int, c_uint, c_void, dev_t, flock, fsblkcnt_t, fsfilcnt_t,
+    gid_t, ino_t, mode_t, nlink_t, off_t, pid_t, size_t, stat, statvfs, time_t, uid_t,
 };
+use std::os::raw::{c_short, c_ulong};
 
 #[repr(C)]
 pub struct FuseArgs {
@@ -34,8 +35,11 @@ pub struct FuseReq;
 pub struct FuseSession;
 
 pub enum FuseBufFlags {
+    #[allow(dead_code)]
     FuseBufIsFd = 1 << 1,
+    #[allow(dead_code)]
     FuseBufFdSeek = 1 << 2,
+    #[allow(dead_code)]
     FuseBufFdRetry = 1 << 3,
 }
 
@@ -75,6 +79,7 @@ pub struct FuseForgetData {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseCtx {
     uid: uid_t,
     gid: gid_t,
@@ -92,11 +97,23 @@ pub struct FuseBufvec {
 
 #[repr(C)]
 pub struct FuseEntryParam {
-    ino: u64,
-    generation: u64,
-    attr: stat,
-    attr_timeout: f64,
-    entry_timeout: f64,
+    pub(crate) ino: u64,
+    pub(crate) generation: u64,
+    pub(crate) attr: stat,
+    pub(crate) attr_timeout: f64,
+    pub(crate) entry_timeout: f64,
+}
+
+impl FuseEntryParam {
+    pub fn new(attr: FuseAttr, generation: u64, attr_timeout: f64, entry_timeout: f64) -> Self {
+        Self {
+            ino: attr.ino,
+            generation,
+            attr: attr.convert(),
+            attr_timeout,
+            entry_timeout,
+        }
+    }
 }
 
 #[repr(C)]
@@ -211,8 +228,9 @@ pub struct FuseLowLevelOps {
     // void (*write_buf) (fuse_req_t req, fuse_ino_t ino, struct fuse_bufvec *bufv, off_t off, struct fuse_file_info *fi);
     pub(crate) write_buf: fn(*mut FuseReq, u64, *mut FuseBufvec, off_t, *mut FuseFileInfo),
 
+    // TODO
     // void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino, off_t offset, struct fuse_bufvec *bufv);
-    pub(crate) retrieve_reply: fn(*mut FuseReq, *mut c_void, u64, off_t, *mut FuseBufvec),
+    // pub(crate) retrieve_reply: fn(*mut FuseReq, *mut c_void, u64, off_t, *mut FuseBufvec),
 
     // void (*forget_multi) (fuse_req_t req, size_t count, struct fuse_forget_data *forgets);
     pub(crate) forget_multi: fn(*mut FuseReq, size_t, *mut FuseForgetData),
@@ -268,8 +286,8 @@ pub struct FuseAttr {
 }
 
 impl FuseAttr {
-    pub fn new(attr: &stat) -> FuseAttr {
-        FuseAttr {
+    pub fn new(attr: &stat) -> Self {
+        Self {
             dev: attr.st_dev as u64,
             ino: attr.st_ino as u64,
             nlink: attr.st_nlink as u32,
@@ -310,42 +328,148 @@ impl FuseAttr {
     }
 }
 
+#[repr(C)]
+pub struct FuseStatvfs {
+    pub bsize: u64,
+    pub frsize: u64,
+    pub blocks: u64,
+    pub bfree: u64,
+    pub bavail: u64,
+    pub files: u64,
+    pub ffree: u64,
+    pub favail: u64,
+    pub fsid: u64,
+    pub flag: u64,
+    pub namemax: u64,
+}
+
+impl FuseStatvfs {
+    pub fn new(st: &statvfs) -> Self {
+        Self {
+            bsize: st.f_bsize as u64,
+            frsize: st.f_frsize as u64,
+            blocks: st.f_blocks as u64,
+            bfree: st.f_bfree as u64,
+            bavail: st.f_bavail as u64,
+            files: st.f_files as u64,
+            ffree: st.f_ffree as u64,
+            favail: st.f_favail as u64,
+            fsid: st.f_fsid as u64,
+            flag: st.f_flag as u64,
+            namemax: st.f_namemax as u64,
+        }
+    }
+    pub fn convert(&self) -> statvfs {
+        let mut st = unsafe { mem::zeroed::<statvfs>() };
+        st.f_bsize = self.bsize as c_ulong;
+        st.f_frsize = self.frsize as c_ulong;
+        st.f_blocks = self.blocks as fsblkcnt_t;
+        st.f_bfree = self.bfree as fsblkcnt_t;
+        st.f_bavail = self.bavail as fsblkcnt_t;
+        st.f_files = self.files as fsfilcnt_t;
+        st.f_ffree = self.ffree as fsfilcnt_t;
+        st.f_favail = self.favail as fsfilcnt_t;
+        st.f_fsid = self.fsid as c_ulong;
+        st.f_flag = self.flag as c_ulong;
+        st.f_namemax = self.namemax as c_ulong;
+        st
+    }
+}
+
+#[repr(C)]
+pub struct FuseLock {
+    type_: i16,
+    whence: i16,
+    start: i64,
+    len: i64,
+    pid: i32,
+}
+
+impl FuseLock {
+    pub fn new(lock: &flock) -> Self {
+        Self {
+            type_: lock.l_type as i16,
+            whence: lock.l_whence as i16,
+            start: lock.l_start as i64,
+            len: lock.l_len as i64,
+            pid: lock.l_pid as i32,
+        }
+    }
+    pub fn convert(&self) -> flock {
+        let mut lock = unsafe { mem::zeroed::<flock>() };
+        lock.l_type = self.type_ as c_short;
+        lock.l_whence = self.whence as c_short;
+        lock.l_start = self.start as off_t;
+        lock.l_len = self.len as off_t;
+        lock.l_pid = self.pid as pid_t;
+        lock
+    }
+}
 #[link(name = "fuse3")]
 extern "C" {
+    #[allow(improper_ctypes)]
     pub fn fuse_session_new(
         args: *mut FuseArgs,
         op: *const FuseLowLevelOps,
         op_size: size_t,
         userdata: *mut c_void,
     ) -> *mut FuseSession;
+    #[allow(improper_ctypes)]
     pub fn fuse_session_loop(fuse_session: *mut FuseSession) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_session_destroy(fuse_session: *mut FuseSession);
+    #[allow(improper_ctypes)]
     pub fn fuse_session_mount(fuse_session: *mut FuseSession, mountpoint: *const c_char);
+    #[allow(improper_ctypes)]
     pub fn fuse_session_unmount(fuse_session: *mut FuseSession);
-    pub fn fuse_session_exit(fuse_session: *mut FuseSession);
-    pub fn fuse_session_exited(fuse_session: *mut FuseSession) -> c_int;
-    pub fn fuse_session_reset(fuse_session: *mut FuseSession);
+    // #[allow(improper_ctypes)]
+    // pub fn fuse_session_exit(fuse_session: *mut FuseSession);
+    // #[allow(improper_ctypes)]
+    // pub fn fuse_session_exited(fuse_session: *mut FuseSession) -> c_int;
+    // #[allow(improper_ctypes)]
+    // pub fn fuse_session_reset(fuse_session: *mut FuseSession);
+    #[allow(improper_ctypes)]
     pub fn fuse_req_userdata(req: *mut FuseReq) -> *mut c_void;
+    #[allow(improper_ctypes)]
     pub fn fuse_req_ctx(req: *mut FuseReq) -> *const FuseCtx;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_open(req: *mut FuseReq, fi: *const FuseFileInfo) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_write(req: *mut FuseReq, count: size_t) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_err(req: *mut FuseReq, err: c_int) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_none(req: *mut FuseReq);
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_entry(req: *mut FuseReq, e: *const FuseEntryParam) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_create(
         req: *mut FuseReq,
         e: *const FuseEntryParam,
         fi: *const FuseFileInfo,
     ) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_attr(req: *mut FuseReq, attr: *const stat, attr_timeout: f64) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_readlink(req: *mut FuseReq, link: *const c_char) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_buf(req: *mut FuseReq, buf: *const c_char, size: size_t) -> c_int;
+    // #[allow(improper_ctypes)]
     // pub fn fuse_reply_data(req: *mut FuseReq, bufv: *mut FuseBufvec, flags: FuseBufCopyFlags) -> c_int;
-    pub fn fuse_reply_iov(req: *mut FuseReq, iov: *const iovec, count: c_int) -> c_int;
+    // #[allow(improper_ctypes)]
+    // pub fn fuse_reply_iov(req: *mut FuseReq, iov: *const iovec, count: c_int) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_statfs(req: *mut FuseReq, stbuf: *const statvfs) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_xattr(req: *mut FuseReq, count: size_t) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_lock(req: *mut FuseReq, lock: *const flock) -> c_int;
+    #[allow(improper_ctypes)]
     pub fn fuse_reply_bmap(req: *mut FuseReq, idx: u64) -> c_int;
+    #[allow(improper_ctypes)]
+    pub fn fuse_reply_poll(req: *mut FuseReq, revents: u32) -> c_int;
+    #[allow(improper_ctypes)]
+    pub fn fuse_reply_lseek(req: *mut FuseReq, off: off_t) -> c_int;
 }
 
 #[cfg(test)]
