@@ -6,8 +6,14 @@ use std::mem::size_of;
 use std::slice;
 
 use libc::{
+    self,
     c_char, c_int, c_uint, c_void, dev_t, flock, gid_t, iovec, mode_t, off_t, pid_t, size_t, stat,
     statvfs, uid_t, ENOSYS,
+    ino_t,
+    nlink_t,
+    blksize_t,
+    blkcnt_t,
+    time_t,
 };
 
 #[repr(C)]
@@ -289,6 +295,73 @@ pub struct FuseLowLevelOps {
     // void (*lseek) (fuse_req_t req, fuse_ino_t ino, off_t off, int whence, struct fuse_file_info *fi);
     lseek: fn(*mut FuseReq, u64, off_t, c_int, *mut FuseFileInfo),
 }
+
+
+#[repr(C)]
+pub struct FuseAttr {
+    pub ino: u64,
+    pub size: u64,
+    pub blocks: u64,
+    pub atime: u64,
+    pub atimensec: u32,
+    pub mtime: u64,
+    pub mtimensec: u32,
+    pub ctime: u64,
+    pub ctimensec: u32,
+    pub mode: u32,
+    pub nlink: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub rdev: u32,
+    pub blksize: u32,
+    pub padding: u32,
+}
+
+impl FuseAttr {
+    pub fn new(attr: &stat) -> FuseAttr {
+        unsafe {
+            FuseAttr {
+                ino: attr.st_ino as u64,
+                nlink: attr.st_nlink as u32,
+                size: attr.st_size as u64,
+                blocks: attr.st_blocks as u64,
+                atime: attr.st_atime as u64,
+                atimensec: attr.st_atime_nsec as u32,
+                mtime: attr.st_mtime as u64,
+                mtimensec: attr.st_mtime_nsec as u32,
+                ctime: attr.st_ctime as u64,
+                ctimensec: attr.st_ctime_nsec as u32,
+                mode: attr.st_mode as u32,
+                uid: attr.st_uid as u32,
+                gid: attr.st_gid as u32,
+                rdev: attr.st_rdev as u32,
+                blksize: attr.st_blksize as u32,
+                padding: 0,
+            }
+        }
+    }
+    pub fn convert(&self) -> stat {
+        let mut sb = unsafe {mem::zeroed::<stat>()};
+        sb.st_dev = 0 as dev_t;
+        sb.st_ino = self.ino as ino_t;
+        sb.st_nlink = self.nlink as nlink_t;
+        sb.st_mode = self.mode as mode_t;
+        sb.st_uid = self.uid as uid_t;
+        sb.st_gid = self.gid as gid_t;
+        sb.st_rdev = self.rdev as dev_t;
+        sb.st_size = self.size as off_t;
+        sb.st_blksize = self.blksize as blksize_t;
+        sb.st_blocks = self.blocks as blkcnt_t;
+        sb.st_atime = self.atime as time_t;
+        sb.st_atime_nsec = self.atimensec as i64;
+        sb.st_mtime = self.mtime as time_t;
+        sb.st_mtime_nsec = self.mtimensec as i64;
+        sb.st_ctime = self.ctime as time_t;
+        sb.st_ctime_nsec = self.ctimensec as i64;
+        sb
+    }
+}
+
 
 #[link(name = "fuse3")]
 extern "C" {
@@ -1191,3 +1264,53 @@ pub fn fuse_loop<T: FileSystem>(mountpoint: &str, file_system: &mut T) {
         fuse_session_destroy(session);
     }
 }
+
+
+
+#[cfg(test)]
+mod tests {
+    use crate::FuseAttr;
+    use libc::{stat, S_IFREG, S_IRUSR, S_IWUSR, S_IRGRP, S_IWGRP, S_IROTH, S_IWOTH};
+    use std::mem;
+    use std::ffi::CString;
+    use std::borrow::BorrowMut;
+    #[test]
+    fn fuse_attr_new() {
+        let sb = unsafe {
+            let mut sb: stat = unsafe {mem::zeroed::<stat>()};
+            let ret = unsafe {
+                stat(
+                    CString::new("./tests/resource/a").unwrap().as_ptr(),
+                    sb.borrow_mut()
+                )
+            };
+            assert_eq!(ret, 0);
+            sb
+        };
+        let attr = FuseAttr::new(&sb);
+        assert_eq!(attr.size, 13);
+        assert_eq!(attr.blocks, 8);
+        assert_eq!(attr.mode, S_IFREG | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+        assert_eq!(attr.nlink, 1);
+        assert_eq!(attr.rdev, 0);
+        assert_eq!(attr.padding, 0);
+
+        let sc = attr.convert();
+        assert_eq!(sb.st_ino, sc.st_ino);
+        assert_eq!(sb.st_nlink, sc.st_nlink);
+        assert_eq!(sb.st_mode, sc.st_mode);
+        assert_eq!(sb.st_uid, sc.st_uid);
+        assert_eq!(sb.st_gid, sc.st_gid);
+        assert_eq!(sb.st_rdev, sc.st_rdev);
+        assert_eq!(sb.st_size, sc.st_size);
+        assert_eq!(sb.st_blksize, sc.st_blksize);
+        assert_eq!(sb.st_blocks, sc.st_blocks);
+        assert_eq!(sb.st_atime, sc.st_atime);
+        assert_eq!(sb.st_atime_nsec, sc.st_atime_nsec);
+        assert_eq!(sb.st_mtime, sc.st_mtime);
+        assert_eq!(sb.st_mtime_nsec, sc.st_mtime_nsec);
+        assert_eq!(sb.st_ctime, sc.st_ctime);
+        assert_eq!(sb.st_ctime_nsec, sc.st_ctime_nsec);
+    }
+}
+
