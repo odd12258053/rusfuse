@@ -2,6 +2,7 @@ use crate::fuse::{
     FuseAttr, FuseBufvec, FuseCtx, FuseEntryParam, FuseFileInfo, FuseForgetData, FuseLock,
     FusePollhandle, FuseStatvfs,
 };
+use crate::FuseDirectory;
 use libc::ENOSYS;
 
 pub trait FileSystem {
@@ -149,7 +150,7 @@ pub trait FileSystem {
         _size: usize,
         _off: i64,
         _fi: &mut FuseFileInfo,
-    ) -> Result<&str, i32> {
+    ) -> Result<Vec<FuseDirectory>, i32> {
         Err(ENOSYS)
     }
     fn releasedir(&mut self, _ctx: &FuseCtx, _ino: u64, _fi: &mut FuseFileInfo) -> Result<(), i32> {

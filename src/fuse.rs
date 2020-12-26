@@ -2,11 +2,13 @@ use std::mem;
 
 use libc::{
     blkcnt_t, blksize_t, c_char, c_int, c_uint, c_void, dev_t, flock, fsblkcnt_t, fsfilcnt_t,
-    gid_t, ino_t, mode_t, nlink_t, off_t, pid_t, size_t, stat, statvfs, time_t, uid_t,
+    gid_t, ino_t, mode_t, nlink_t, off_t, pid_t, size_t, stat, statvfs, time_t, uid_t, S_IFBLK,
+    S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFREG, S_IFSOCK,
 };
 use std::os::raw::{c_short, c_ulong};
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseArgs {
     pub argc: c_int,
     pub argv: *const *const c_char,
@@ -14,6 +16,7 @@ pub struct FuseArgs {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseConnInfo {
     proto_major: c_uint,
     proto_minor: c_uint,
@@ -34,6 +37,7 @@ pub struct FuseReq;
 #[repr(C)]
 pub struct FuseSession;
 
+#[derive(Debug)]
 pub enum FuseBufFlags {
     #[allow(dead_code)]
     FuseBufIsFd = 1 << 1,
@@ -44,6 +48,7 @@ pub enum FuseBufFlags {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseBuf {
     size: size_t,
     flags: FuseBufFlags,
@@ -53,6 +58,7 @@ pub struct FuseBuf {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseFileInfo {
     flags: i16,
     writepage: u16,
@@ -73,6 +79,7 @@ pub struct FuseFileInfo {
 pub struct FusePollhandle;
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseForgetData {
     ino: u64,
     nlookup: u64,
@@ -88,6 +95,7 @@ pub struct FuseCtx {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseBufvec {
     count: size_t,
     idx: size_t,
@@ -97,11 +105,11 @@ pub struct FuseBufvec {
 
 #[repr(C)]
 pub struct FuseEntryParam {
-    pub(crate) ino: u64,
-    pub(crate) generation: u64,
-    pub(crate) attr: stat,
-    pub(crate) attr_timeout: f64,
-    pub(crate) entry_timeout: f64,
+    pub ino: u64,
+    pub generation: u64,
+    pub attr: stat,
+    pub attr_timeout: f64,
+    pub entry_timeout: f64,
 }
 
 impl FuseEntryParam {
@@ -119,137 +127,137 @@ impl FuseEntryParam {
 #[repr(C)]
 pub struct FuseLowLevelOps {
     // void (*init) (void *userdata, struct fuse_conn_info *conn);
-    pub(crate) init: fn(*mut c_void, *mut FuseConnInfo),
+    pub init: *const fn(*mut c_void, *mut FuseConnInfo),
 
     // void (*destroy) (void *userdata);
-    pub(crate) destroy: fn(*mut c_void),
+    pub destroy: *const fn(*mut c_void),
 
     // void (*lookup) (fuse_req_t req, fuse_ino_t parent, const char *name);
-    pub(crate) lookup: fn(*mut FuseReq, u64, *const c_char),
+    pub lookup: *const fn(*mut FuseReq, u64, *const c_char),
 
     // void (*forget) (fuse_req_t req, fuse_ino_t ino, uint64_t nlookup);
-    pub(crate) forget: fn(*mut FuseReq, u64, u64),
+    pub forget: *const fn(*mut FuseReq, u64, u64),
 
     // void (*getattr) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi);
-    pub(crate) getattr: fn(*mut FuseReq, u64, *mut FuseFileInfo),
+    pub getattr: *const fn(*mut FuseReq, u64, *mut FuseFileInfo),
 
     // void (*setattr) (fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi);
-    pub(crate) setattr: fn(*mut FuseReq, u64, *mut stat, i16, *mut FuseFileInfo),
+    pub setattr: *const fn(*mut FuseReq, u64, *mut stat, i16, *mut FuseFileInfo),
 
     // void (*readlink) (fuse_req_t req, fuse_ino_t ino);
-    pub(crate) readlink: fn(*mut FuseReq, u64),
+    pub readlink: *const fn(*mut FuseReq, u64),
 
     // void (*mknod) (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev_t rdev);
-    pub(crate) mknod: fn(*mut FuseReq, u64, *const c_char, mode_t, dev_t),
+    pub mknod: *const fn(*mut FuseReq, u64, *const c_char, mode_t, dev_t),
 
     // void (*mkdir) (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode);
-    pub(crate) mkdir: fn(*mut FuseReq, u64, *const c_char, mode_t),
+    pub mkdir: *const fn(*mut FuseReq, u64, *const c_char, mode_t),
 
     // void (*unlink) (fuse_req_t req, fuse_ino_t parent, const char *name);
-    pub(crate) unlink: fn(*mut FuseReq, u64, *const c_char),
+    pub unlink: *const fn(*mut FuseReq, u64, *const c_char),
 
     // void (*rmdir) (fuse_req_t req, fuse_ino_t parent, const char *name);
-    pub(crate) rmdir: fn(*mut FuseReq, u64, *const c_char),
+    pub rmdir: *const fn(*mut FuseReq, u64, *const c_char),
 
     // void (*symlink) (fuse_req_t req, const char *link, fuse_ino_t parent, const char *name);
-    pub(crate) symlink: fn(*mut FuseReq, *const c_char, u64, *const c_char),
+    pub symlink: *const fn(*mut FuseReq, *const c_char, u64, *const c_char),
 
     // void (*rename) (fuse_req_t req, fuse_ino_t parent, const char *name, fuse_ino_t newparent, const char *newname, unsigned int flags);
-    pub(crate) rename: fn(*mut FuseReq, u64, *const c_char, u64, *const c_char, u16),
+    pub rename: *const fn(*mut FuseReq, u64, *const c_char, u64, *const c_char, u16),
 
     // void (*link) (fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char *newname);
-    pub(crate) link: fn(*mut FuseReq, u64, u64, *const c_char),
+    pub link: *const fn(*mut FuseReq, u64, u64, *const c_char),
 
     // void (*open) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi);
-    pub(crate) open: fn(*mut FuseReq, u64, *mut FuseFileInfo),
+    pub open: *const fn(*mut FuseReq, u64, *mut FuseFileInfo),
 
     // void (*read) (fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi);
-    pub(crate) read: fn(*mut FuseReq, u64, size_t, off_t, *mut FuseFileInfo),
+    pub read: *const fn(*mut FuseReq, u64, size_t, off_t, *mut FuseFileInfo),
 
     // void (*write) (fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi);
-    pub(crate) write: fn(*mut FuseReq, u64, *const c_char, size_t, off_t, *mut FuseFileInfo),
+    pub write: *const fn(*mut FuseReq, u64, *const c_char, size_t, off_t, *mut FuseFileInfo),
 
     // void (*flush) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi);
-    pub(crate) flush: fn(*mut FuseReq, u64, *mut FuseFileInfo),
+    pub flush: *const fn(*mut FuseReq, u64, *mut FuseFileInfo),
 
     // void (*release) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi);
-    pub(crate) release: fn(*mut FuseReq, u64, *mut FuseFileInfo),
+    pub release: *const fn(*mut FuseReq, u64, *mut FuseFileInfo),
 
     // void (*fsync) (fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi);
-    pub(crate) fsync: fn(*mut FuseReq, u64, c_int, *mut FuseFileInfo),
+    pub fsync: *const fn(*mut FuseReq, u64, c_int, *mut FuseFileInfo),
 
     // void (*opendir) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi);
-    pub(crate) opendir: fn(*mut FuseReq, u64, *mut FuseFileInfo),
+    pub opendir: *const fn(*mut FuseReq, u64, *mut FuseFileInfo),
 
     // void (*readdir) (fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi);
-    pub(crate) readdir: fn(*mut FuseReq, u64, size_t, off_t, *mut FuseFileInfo),
+    pub readdir: *const fn(*mut FuseReq, u64, size_t, off_t, *mut FuseFileInfo),
 
     // void (*releasedir) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi);
-    pub(crate) releasedir: fn(*mut FuseReq, u64, *mut FuseFileInfo),
+    pub releasedir: *const fn(*mut FuseReq, u64, *mut FuseFileInfo),
 
     // void (*fsyncdir) (fuse_req_t req, fuse_ino_t ino, int datasync, struct fuse_file_info *fi);
-    pub(crate) fsyncdir: fn(*mut FuseReq, u64, c_int, *mut FuseFileInfo),
+    pub fsyncdir: *const fn(*mut FuseReq, u64, c_int, *mut FuseFileInfo),
 
     // void (*statfs) (fuse_req_t req, fuse_ino_t ino);
-    pub(crate) statfs: fn(*mut FuseReq, u64),
+    pub statfs: *const fn(*mut FuseReq, u64),
 
     // void (*setxattr) (fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size, int flags);
-    pub(crate) setxattr: fn(*mut FuseReq, u64, *const c_char, *const c_char, size_t, c_int),
+    pub setxattr: *const fn(*mut FuseReq, u64, *const c_char, *const c_char, size_t, c_int),
 
     // void (*getxattr) (fuse_req_t req, fuse_ino_t ino, const char *name, size_t size);
-    pub(crate) getxattr: fn(*mut FuseReq, u64, *const c_char, size_t),
+    pub getxattr: *const fn(*mut FuseReq, u64, *const c_char, size_t),
 
     // void (*listxattr) (fuse_req_t req, fuse_ino_t ino, size_t size);
-    pub(crate) listxattr: fn(*mut FuseReq, u64, size_t),
+    pub listxattr: *const fn(*mut FuseReq, u64, size_t),
 
     // void (*removexattr) (fuse_req_t req, fuse_ino_t ino, const char *name);
-    pub(crate) removexattr: fn(*mut FuseReq, u64, *const c_char),
+    pub removexattr: *const fn(*mut FuseReq, u64, *const c_char),
 
     // void (*access) (fuse_req_t req, fuse_ino_t ino, int mask);
-    pub(crate) access: fn(*mut FuseReq, u64, c_int),
+    pub access: *const fn(*mut FuseReq, u64, c_int),
 
     // void (*create) (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi);
-    pub(crate) create: fn(*mut FuseReq, u64, *const c_char, mode_t, *mut FuseFileInfo),
+    pub create: *const fn(*mut FuseReq, u64, *const c_char, mode_t, *mut FuseFileInfo),
 
     // void (*getlk) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, struct flock *lock);
-    pub(crate) getlk: fn(*mut FuseReq, u64, *mut FuseFileInfo, *mut flock),
+    pub getlk: *const fn(*mut FuseReq, u64, *mut FuseFileInfo, *mut flock),
 
     // void (*setlk) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, struct flock *lock, int sleep);
-    pub(crate) setlk: fn(*mut FuseReq, u64, *mut FuseFileInfo, *mut flock, c_int),
+    pub setlk: *const fn(*mut FuseReq, u64, *mut FuseFileInfo, *mut flock, c_int),
 
     // void (*bmap) (fuse_req_t req, fuse_ino_t ino, size_t blocksize, uint64_t idx);
-    pub(crate) bmap: fn(*mut FuseReq, u64, size_t, u64),
+    pub bmap: *const fn(*mut FuseReq, u64, size_t, u64),
 
     // TODO: Ioctl
 
     // void (*poll) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, struct fuse_pollhandle *ph);
-    pub(crate) poll: fn(*mut FuseReq, u64, *mut FuseFileInfo, *mut FusePollhandle),
+    pub poll: *const fn(*mut FuseReq, u64, *mut FuseFileInfo, *mut FusePollhandle),
 
     // void (*write_buf) (fuse_req_t req, fuse_ino_t ino, struct fuse_bufvec *bufv, off_t off, struct fuse_file_info *fi);
-    pub(crate) write_buf: fn(*mut FuseReq, u64, *mut FuseBufvec, off_t, *mut FuseFileInfo),
+    pub write_buf: *const fn(*mut FuseReq, u64, *mut FuseBufvec, off_t, *mut FuseFileInfo),
 
     // TODO
     // void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino, off_t offset, struct fuse_bufvec *bufv);
-    // pub(crate) retrieve_reply: fn(*mut FuseReq, *mut c_void, u64, off_t, *mut FuseBufvec),
+    // pub retrieve_reply: *const fn(*mut FuseReq, *mut c_void, u64, off_t, *mut FuseBufvec),
 
     // void (*forget_multi) (fuse_req_t req, size_t count, struct fuse_forget_data *forgets);
-    pub(crate) forget_multi: fn(*mut FuseReq, size_t, *mut FuseForgetData),
+    pub forget_multi: *const fn(*mut FuseReq, size_t, *mut FuseForgetData),
 
     // void (*flock) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi, int op);
-    pub(crate) flock: fn(*mut FuseReq, u64, *mut FuseFileInfo, c_int),
+    pub flock: *const fn(*mut FuseReq, u64, *mut FuseFileInfo, c_int),
 
     // void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode, off_t offset, off_t length, struct fuse_file_info *fi);
-    pub(crate) fallocate: fn(*mut FuseReq, u64, c_int, off_t, off_t, *mut FuseFileInfo),
+    pub fallocate: *const fn(*mut FuseReq, u64, c_int, off_t, off_t, *mut FuseFileInfo),
 
     // void (*readdirplus) (fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi);
-    pub(crate) readdirplus: fn(*mut FuseReq, u64, size_t, off_t, *mut FuseFileInfo),
+    pub readdirplus: *const fn(*mut FuseReq, u64, size_t, off_t, *mut FuseFileInfo),
 
     // void (*copy_file_range) (fuse_req_t req, fuse_ino_t ino_in,
     //              off_t off_in, struct fuse_file_info *fi_in,
     //              fuse_ino_t ino_out, off_t off_out,
     //              struct fuse_file_info *fi_out, size_t len,
     //              int flags);
-    pub(crate) copy_file_range: fn(
+    pub copy_file_range: *const fn(
         *mut FuseReq,
         u64,
         off_t,
@@ -262,7 +270,7 @@ pub struct FuseLowLevelOps {
     ),
 
     // void (*lseek) (fuse_req_t req, fuse_ino_t ino, off_t off, int whence, struct fuse_file_info *fi);
-    pub(crate) lseek: fn(*mut FuseReq, u64, off_t, c_int, *mut FuseFileInfo),
+    pub lseek: *const fn(*mut FuseReq, u64, off_t, c_int, *mut FuseFileInfo),
 }
 
 #[repr(C)]
@@ -405,6 +413,60 @@ impl FuseLock {
         lock
     }
 }
+
+pub enum FileType {
+    Socket,
+    SymbolicLink,
+    RegularFile,
+    BlockDevice,
+    Directory,
+    CharacterDevice,
+    FIFO,
+}
+
+impl FileType {
+    fn to_mode(&self) -> u32 {
+        match self {
+            FileType::Socket => S_IFSOCK,
+            FileType::SymbolicLink => S_IFLNK,
+            FileType::RegularFile => S_IFREG,
+            FileType::BlockDevice => S_IFBLK,
+            FileType::Directory => S_IFDIR,
+            FileType::CharacterDevice => S_IFCHR,
+            FileType::FIFO => S_IFIFO,
+        }
+    }
+}
+
+pub struct FuseDirectory {
+    pub name: String,
+    pub file_type: FileType,
+    pub ino: u64,
+}
+
+impl FuseDirectory {
+    pub fn attr(&self) -> FuseAttr {
+        FuseAttr {
+            dev: 0,
+            ino: self.ino,
+            size: 0,
+            blocks: 0,
+            atime: 0,
+            atimensec: 0,
+            mtime: 0,
+            mtimensec: 0,
+            ctime: 0,
+            ctimensec: 0,
+            mode: self.file_type.to_mode(),
+            nlink: 0,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            blksize: 0,
+        }
+    }
+}
+
 #[link(name = "fuse3")]
 extern "C" {
     #[allow(improper_ctypes)]
@@ -470,6 +532,15 @@ extern "C" {
     pub fn fuse_reply_poll(req: *mut FuseReq, revents: u32) -> c_int;
     #[allow(improper_ctypes)]
     pub fn fuse_reply_lseek(req: *mut FuseReq, off: off_t) -> c_int;
+    #[allow(improper_ctypes)]
+    pub fn fuse_add_direntry(
+        req: *mut FuseReq,
+        buf: *mut c_char,
+        bufsize: size_t,
+        name: *const c_char,
+        stbuf: *const stat,
+        off: off_t,
+    ) -> size_t;
 }
 
 #[cfg(test)]
