@@ -1,11 +1,16 @@
 [package]
 name = "rusfuse"
-version = "0.1.0"
+version = "0.0.2"
 authors = ["odd <odd12258053@gmail.com>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Rust library for filesystems in userspace (FUSE ver3)"
+readme = "README.md"
+documentation = "https://docs.rs/rusfuse"
+homepage = "https://github.com/odd12258053/rusfuse"
+repository = "https://github.com/odd12258053/rusfuse"
+license = "MIT"
+keywords = ["libfuse", "fuse3", "filesystem"]
+categories = ["filesystem", "api-bindings"]
 
 [dependencies]
 libc = "0.2.81"
-#signal-hook = "0.2.2"
