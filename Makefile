@@ -3,3 +3,4 @@ format:
 
 lint:
 	@cargo fmt -- --check
+	@cargo check

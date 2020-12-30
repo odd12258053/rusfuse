@@ -1,10 +1,12 @@
 use std::borrow::{Borrow, BorrowMut};
+use std::cmp::min;
 use std::env;
 use std::ffi::{CStr, CString};
 use std::mem::size_of;
+use std::ops::{BitAnd, BitOr};
 use std::ptr::{null, null_mut};
 
-use libc::{c_char, c_int, c_void, dev_t, flock, mode_t, off_t, size_t, stat};
+use libc::{c_char, c_int, c_void, dev_t, flock, mode_t, off_t, size_t, stat, EINTR};
 
 mod filesystem;
 mod fuse;
@@ -12,19 +14,19 @@ mod utils;
 
 pub use crate::filesystem::FileSystem;
 use crate::fuse::{
-    fuse_add_direntry, fuse_reply_attr, fuse_reply_bmap, fuse_reply_buf, fuse_reply_create,
-    fuse_reply_entry, fuse_reply_err, fuse_reply_lock, fuse_reply_lseek, fuse_reply_none,
-    fuse_reply_open, fuse_reply_poll, fuse_reply_readlink, fuse_reply_statfs, fuse_reply_write,
-    fuse_reply_xattr, fuse_req_ctx, fuse_req_userdata, fuse_session_destroy, fuse_session_loop,
-    fuse_session_mount, fuse_session_new, fuse_session_unmount, FuseArgs, FuseConnInfo,
-    FuseLowLevelOps, FuseReq,
+    fuse_add_direntry, fuse_remove_signal_handlers, fuse_reply_attr, fuse_reply_bmap,
+    fuse_reply_buf, fuse_reply_create, fuse_reply_entry, fuse_reply_err, fuse_reply_lock,
+    fuse_reply_lseek, fuse_reply_none, fuse_reply_open, fuse_reply_poll, fuse_reply_readlink,
+    fuse_reply_statfs, fuse_reply_write, fuse_reply_xattr, fuse_req_ctx, fuse_req_userdata,
+    fuse_session_destroy, fuse_session_exited, fuse_session_mount, fuse_session_new,
+    fuse_session_process_buf, fuse_session_receive_buf, fuse_session_reset, fuse_session_unmount,
+    fuse_set_signal_handlers, FuseArgs, FuseBuf, FuseConnInfo, FuseLowLevelOps, FuseReq,
+    FuseSession,
 };
 pub use crate::fuse::{
     FileType, FuseAttr, FuseBufvec, FuseCtx, FuseDirectory, FuseEntryParam, FuseFileInfo,
     FuseForgetData, FuseLock, FusePollhandle, FuseStatvfs,
 };
-use std::cmp::min;
-use std::ops::{BitAnd, BitOr};
 
 pub enum FuseOpFlag {
     Init = 1 << 0,
@@ -825,32 +827,59 @@ impl FuseOps {
     }
 }
 
-pub fn fuse_loop<T: FileSystem>(mountpoint: &str, file_system: &mut T, ops: u64) {
-    let arg0 = CString::new(env::args().nth(0).unwrap()).unwrap();
-    let mountpoint = CString::new(mountpoint).unwrap();
-    let c_argv: Vec<*const c_char> = vec![arg0.as_ptr()];
-    let mut fuse_args = FuseArgs {
-        argc: 1 as c_int,
-        argv: c_argv.as_ptr(),
-        allocated: 0 as c_int,
-    };
-    let op = FuseOps::fuse_low_level_ops::<T>(ops);
+pub struct Fuse {
+    session: &'static mut FuseSession,
+}
+impl Fuse {
+    pub fn new<T: FileSystem>(mountpoint: &str, file_system: &mut T, ops: u64) -> Self {
+        let arg0 = CString::new(env::args().nth(0).unwrap()).unwrap();
+        let mountpoint = CString::new(mountpoint).unwrap();
+        let c_argv: Vec<*const c_char> = vec![arg0.as_ptr()];
+        let mut fuse_args = FuseArgs {
+            argc: 1 as c_int,
+            argv: c_argv.as_ptr(),
+            allocated: 0 as c_int,
+        };
+        let op = FuseOps::fuse_low_level_ops::<T>(ops);
 
-    let session = unsafe {
-        let session = fuse_session_new(
-            fuse_args.borrow_mut(),
-            op.borrow(),
-            size_of::<FuseLowLevelOps>(),
-            file_system.borrow_mut() as *mut T as *mut c_void,
-        );
-        let _ = fuse_session_mount(session, mountpoint.as_ptr());
-        session
-    };
+        let session = unsafe {
+            let session = fuse_session_new(
+                fuse_args.borrow_mut(),
+                op.borrow(),
+                size_of::<FuseLowLevelOps>(),
+                file_system.borrow_mut() as *mut T as *mut c_void,
+            );
+            let _ = fuse_set_signal_handlers(session);
+            let _ = fuse_session_mount(session, mountpoint.as_ptr());
+            session.as_mut().unwrap()
+        };
+        Fuse { session }
+    }
+    pub fn run(&mut self) {
+        let sess = self.session.borrow_mut();
+        let mut buf = FuseBuf::new();
+        unsafe {
+            while fuse_session_exited(sess) == 0 {
+                let res = fuse_session_receive_buf(sess, buf.borrow_mut());
+                if res == -EINTR {
+                    continue;
+                } else if res < 0 {
+                    break;
+                }
+                let _ = fuse_session_process_buf(sess, buf.borrow());
+            }
+            fuse_session_reset(sess);
+        }
+    }
+}
 
-    let _ = unsafe { fuse_session_loop(session) };
-
-    unsafe {
-        fuse_session_unmount(session);
-        fuse_session_destroy(session);
+impl Drop for Fuse {
+    fn drop(&mut self) {
+        let sess = self.session.borrow_mut();
+        unsafe {
+            fuse_session_unmount(sess);
+            fuse_remove_signal_handlers(sess);
+            fuse_session_destroy(sess);
+        }
     }
 }

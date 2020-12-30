@@ -2,6 +2,7 @@ use std::env;
 
 use rusfuse::*;
 
+#[derive(Debug)]
 struct HelloFs;
 
 const ENOENT: i32 = 2;
@@ -122,12 +123,10 @@ impl rusfuse::FileSystem for HelloFs {
         }
     }
 }
+
 fn main() {
     let mountpoint: String = env::args().nth(1).unwrap();
     let mut file_system = HelloFs {};
-    let ops = FuseOpFlag::Lookup
-        | FuseOpFlag::Readdir
-        | FuseOpFlag::Read
-        | FuseOpFlag::Getattr;
-    rusfuse::fuse_loop(&mountpoint, &mut file_system, ops);
+    let ops = FuseOpFlag::Lookup | FuseOpFlag::Readdir | FuseOpFlag::Read | FuseOpFlag::Getattr;
+    Fuse::new(&mountpoint, &mut file_system, ops).run();
 }
