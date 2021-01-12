@@ -1,7 +1,7 @@
 # rusfuse
 Rust library for filesystems in userspace (FUSE ver3)
 
-![Crates.io](https://img.shields.io/crates/l/fuse)
+![Crates.io](https://img.shields.io/crates/l/rusfuse)
 [![Crates.io](https://img.shields.io/crates/v/rusfuse.svg)](https://crates.io/crates/rusfuse)
 
 # Dependencies
