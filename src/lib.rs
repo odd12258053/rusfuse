@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 use std::borrow::{Borrow, BorrowMut};
 use std::cmp::min;
 use std::env;
@@ -109,12 +112,6 @@ macro_rules! ctx {
     };
 }
 
-macro_rules! to_str {
-    ($char:expr) => {
-        CStr::from_ptr($char).to_str().unwrap()
-    };
-}
-
 macro_rules! op {
     ($ops:expr, $name:ident, $flag:ident) => {
         if $ops & FuseOpFlag::$flag == 0 {
@@ -183,7 +180,8 @@ impl FuseOps {
     fn lookup<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.lookup(ctx, parent, unsafe { to_str!(name) }) {
+
+        match file_system.lookup(ctx, parent, unsafe { CStr::from_ptr(name).to_bytes() }) {
             Ok(entry_param) => unsafe {
                 let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
@@ -195,7 +193,7 @@ impl FuseOps {
     fn forget<T: FileSystem>(req: *mut FuseReq, ino: u64, nlookup: u64) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        file_system.forget(ctx, ino, nlookup);
+        file_system.forget(ctx, FuseForgetData { ino, nlookup });
         unsafe {
             fuse_reply_none(req);
         }
@@ -241,7 +239,8 @@ impl FuseOps {
         let ctx = ctx!(req);
         match file_system.readlink(ctx, ino) {
             Ok(link) => unsafe {
-                let _ret = fuse_reply_readlink(req, CString::new(link).unwrap().as_ptr());
+                let link = CString::new(&link[..]).unwrap();
+                let _ret = fuse_reply_readlink(req, link.as_ptr());
             },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
@@ -257,7 +256,13 @@ impl FuseOps {
     ) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.mknod(ctx, parent, unsafe { to_str!(name) }, mode, rdev) {
+        match file_system.mknod(
+            ctx,
+            parent,
+            unsafe { CStr::from_ptr(name).to_bytes() },
+            mode,
+            rdev,
+        ) {
             Ok(entry_param) => unsafe {
                 let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
@@ -269,7 +274,12 @@ impl FuseOps {
     fn mkdir<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char, mode: mode_t) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.mkdir(ctx, parent, unsafe { to_str!(name) }, mode) {
+        match file_system.mkdir(
+            ctx,
+            parent,
+            unsafe { CStr::from_ptr(name).to_bytes() },
+            mode,
+        ) {
             Ok(entry_param) => unsafe {
                 let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
@@ -281,8 +291,10 @@ impl FuseOps {
     fn unlink<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.unlink(ctx, parent, unsafe { to_str!(name) }) {
-            Ok(..) => {}
+        match file_system.unlink(ctx, parent, unsafe { CStr::from_ptr(name).to_bytes() }) {
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -291,8 +303,10 @@ impl FuseOps {
     fn rmdir<T: FileSystem>(req: *mut FuseReq, parent: u64, name: *const c_char) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.rmdir(ctx, parent, unsafe { to_str!(name) }) {
-            Ok(..) => {}
+        match file_system.rmdir(ctx, parent, unsafe { CStr::from_ptr(name).to_bytes() }) {
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -306,9 +320,12 @@ impl FuseOps {
     ) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.symlink(ctx, unsafe { to_str!(link) }, parent, unsafe {
-            to_str!(name)
-        }) {
+        match file_system.symlink(
+            ctx,
+            unsafe { CStr::from_ptr(link).to_bytes() },
+            parent,
+            unsafe { CStr::from_ptr(name).to_bytes() },
+        ) {
             Ok(entry_param) => unsafe {
                 let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
@@ -330,12 +347,14 @@ impl FuseOps {
         match file_system.rename(
             ctx,
             parent,
-            unsafe { to_str!(name) },
+            unsafe { CStr::from_ptr(name).to_bytes() },
             newparent,
-            unsafe { to_str!(newname) },
+            unsafe { CStr::from_ptr(newname).to_bytes() },
             flags,
         ) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -344,7 +363,9 @@ impl FuseOps {
     fn link<T: FileSystem>(req: *mut FuseReq, ino: u64, newparent: u64, newname: *const c_char) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.link(ctx, ino, newparent, unsafe { to_str!(newname) }) {
+        match file_system.link(ctx, ino, newparent, unsafe {
+            CStr::from_ptr(newname).to_bytes()
+        }) {
             Ok(entry_param) => unsafe {
                 let _ret = fuse_reply_entry(req, entry_param.borrow());
             },
@@ -356,7 +377,7 @@ impl FuseOps {
     fn open<T: FileSystem>(req: *mut FuseReq, ino: u64, fi: *mut FuseFileInfo) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.open(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
+        match file_system.open(ctx, ino, unsafe { fi.read() }) {
             Ok(fi) => unsafe {
                 let _ret = fuse_reply_open(req, fi.borrow());
             },
@@ -376,7 +397,7 @@ impl FuseOps {
         let ctx = ctx!(req);
         match file_system.read(ctx, ino, size, off, unsafe { fi.as_mut().unwrap() }) {
             Ok(message) => unsafe {
-                let buf = CString::new(message).unwrap();
+                let buf = CString::new(&message[..]).unwrap();
                 let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
             },
             Err(e) => unsafe {
@@ -394,9 +415,14 @@ impl FuseOps {
     ) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.write(ctx, ino, unsafe { to_str!(buf) }, size, off, unsafe {
-            fi.as_mut().unwrap()
-        }) {
+        match file_system.write(
+            ctx,
+            ino,
+            unsafe { CStr::from_ptr(buf).to_bytes() },
+            size,
+            off,
+            unsafe { fi.as_mut().unwrap() },
+        ) {
             Ok(count) => unsafe {
                 let _ret = fuse_reply_write(req, count);
             },
@@ -409,7 +435,9 @@ impl FuseOps {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
         match file_system.flush(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -419,7 +447,9 @@ impl FuseOps {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
         match file_system.release(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -460,8 +490,8 @@ impl FuseOps {
             Ok(dirs) => unsafe {
                 let mut buf = Vec::<u8>::new();
                 let mut buf_size: usize = 0;
-                for dir in dirs {
-                    let name_buf = CString::new(dir.name.as_str()).unwrap();
+                for dir in dirs.iter() {
+                    let name_buf = CString::new(&dir.name[..]).unwrap();
                     let tmp_buf_size =
                         fuse_add_direntry(req, null_mut(), 0, name_buf.as_ptr(), null(), 0);
                     buf_size += tmp_buf_size;
@@ -498,7 +528,9 @@ impl FuseOps {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
         match file_system.releasedir(ctx, ino, unsafe { fi.as_mut().unwrap() }) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -513,7 +545,9 @@ impl FuseOps {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
         match file_system.fsyncdir(ctx, ino, datasync, unsafe { fi.as_mut().unwrap() }) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -544,12 +578,14 @@ impl FuseOps {
         match file_system.setxattr(
             ctx,
             ino,
-            unsafe { to_str!(name) },
-            unsafe { to_str!(value) },
+            unsafe { CStr::from_ptr(name).to_bytes() },
+            unsafe { CStr::from_ptr(value).to_bytes() },
             size,
             flags,
         ) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -558,12 +594,13 @@ impl FuseOps {
     fn getxattr<T: FileSystem>(req: *mut FuseReq, ino: u64, name: *const c_char, size: size_t) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.getxattr(ctx, ino, unsafe { to_str!(name) }, size) {
+        match file_system.getxattr(ctx, ino, unsafe { CStr::from_ptr(name).to_bytes() }, size) {
             Ok(message) => unsafe {
                 if size == 0 {
-                    let _ret = fuse_reply_xattr(req, size);
+                    let _ret = fuse_reply_xattr(req, message.len());
+                    debug!("get_xattr: ret={}", _ret);
                 } else {
-                    let buf = CString::new(message).unwrap();
+                    let buf = CString::new(&message[..]).unwrap();
                     let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
                 }
             },
@@ -578,9 +615,9 @@ impl FuseOps {
         match file_system.listxattr(ctx, ino, size) {
             Ok(message) => unsafe {
                 if size == 0 {
-                    let _ret = fuse_reply_xattr(req, size);
+                    let _ret = fuse_reply_xattr(req, message.len());
                 } else {
-                    let buf = CString::new(message).unwrap();
+                    let buf = CString::new(&message[..]).unwrap();
                     let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
                 }
             },
@@ -592,8 +629,10 @@ impl FuseOps {
     fn removexattr<T: FileSystem>(req: *mut FuseReq, ino: u64, name: *const c_char) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.removexattr(ctx, ino, unsafe { to_str!(name) }) {
-            Ok(..) => {}
+        match file_system.removexattr(ctx, ino, unsafe { CStr::from_ptr(name).to_bytes() }) {
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -603,7 +642,9 @@ impl FuseOps {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
         match file_system.access(ctx, ino, mask) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -618,9 +659,13 @@ impl FuseOps {
     ) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        match file_system.create(ctx, parent, unsafe { to_str!(name) }, mode, unsafe {
-            fi.as_mut().unwrap()
-        }) {
+        match file_system.create(
+            ctx,
+            parent,
+            unsafe { CStr::from_ptr(name).to_bytes() },
+            mode,
+            unsafe { fi.as_mut().unwrap() },
+        ) {
             Ok(entry_param) => unsafe {
                 let _ret = fuse_reply_create(req, entry_param.borrow(), fi.as_ref().unwrap());
             },
@@ -662,7 +707,9 @@ impl FuseOps {
             &mut FuseLock::new(unsafe { lock.as_ref().unwrap() }),
             sleep,
         ) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -722,7 +769,10 @@ impl FuseOps {
     fn forget_multi<T: FileSystem>(req: *mut FuseReq, count: size_t, forgets: *mut FuseForgetData) {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
-        file_system.forget_multi(ctx, count, unsafe { forgets.as_mut().unwrap() });
+        let fs = (0..count)
+            .map(|i| unsafe { forgets.offset(i as isize).read() })
+            .collect();
+        file_system.forget_multi(ctx, fs);
         unsafe {
             fuse_reply_none(req);
         }
@@ -731,7 +781,9 @@ impl FuseOps {
         let file_system = filesystem!(req);
         let ctx = ctx!(req);
         match file_system.flock(ctx, ino, unsafe { fi.as_mut().unwrap() }, op) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -750,7 +802,9 @@ impl FuseOps {
         match file_system.fallocate(ctx, ino, mode, offset, length, unsafe {
             fi.as_mut().unwrap()
         }) {
-            Ok(..) => {}
+            Ok(..) => unsafe {
+                fuse_reply_err(req, 0);
+            },
             Err(e) => unsafe {
                 fuse_reply_err(req, e);
             },
@@ -767,7 +821,7 @@ impl FuseOps {
         let ctx = ctx!(req);
         match file_system.readdirplus(ctx, ino, size, off, unsafe { fi.as_mut().unwrap() }) {
             Ok(message) => unsafe {
-                let buf = CString::new(message).unwrap();
+                let buf = CString::new(&message[..]).unwrap();
                 let _ret = fuse_reply_buf(req, buf.as_ptr(), message.len());
             },
             Err(e) => unsafe {

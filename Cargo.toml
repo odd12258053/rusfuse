@@ -1,6 +1,6 @@
 [package]
 name = "rusfuse"
-version = "0.0.4"
+version = "0.0.9"
 authors = ["odd <odd12258053@gmail.com>"]
 edition = "2018"
 description = "Rust library for filesystems in userspace (FUSE ver3)"
@@ -14,3 +14,8 @@ categories = ["filesystem", "api-bindings"]
 
 [dependencies]
 libc = "0.2.81"
+env_logger = "0.8.2"
+log = { version ="0.4.13", features = ["max_level_debug", "release_max_level_error"]}
+
+[dev-dependencies]
+colored = "2.0.0"

@@ -73,19 +73,19 @@ impl FuseBuf {
 #[repr(C)]
 #[derive(Debug)]
 pub struct FuseFileInfo {
-    flags: i16,
-    writepage: u16,
-    direct_io: u16,
-    keep_cache: u16,
-    flush: u16,
-    nonseekable: u16,
-    flock_release: u16,
-    cache_readdir: u16,
-    padding: u16,
-    padding2: u16,
-    fh: u64,
-    lock_owner: u64,
-    poll_events: u32,
+    pub flags: i16,
+    pub writepage: u16,
+    pub direct_io: u16,
+    pub keep_cache: u16,
+    pub flush: u16,
+    pub nonseekable: u16,
+    pub flock_release: u16,
+    pub cache_readdir: u16,
+    pub padding: u16,
+    pub padding2: u16,
+    pub fh: u64,
+    pub lock_owner: u64,
+    pub poll_events: u32,
 }
 
 #[repr(C)]
@@ -94,17 +94,17 @@ pub struct FusePollhandle;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FuseForgetData {
-    ino: u64,
-    nlookup: u64,
+    pub ino: u64,
+    pub nlookup: u64,
 }
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct FuseCtx {
-    uid: uid_t,
-    gid: gid_t,
-    pid: pid_t,
-    umask: mode_t,
+    pub uid: uid_t,
+    pub gid: gid_t,
+    pub pid: pid_t,
+    pub umask: mode_t,
 }
 
 #[repr(C)]
@@ -286,6 +286,7 @@ pub(crate) struct FuseLowLevelOps {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FuseAttr {
     pub dev: u64,
     pub ino: u64,
@@ -426,6 +427,7 @@ impl FuseLock {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
 pub enum FileType {
     Socket,
     SymbolicLink,
@@ -437,7 +439,7 @@ pub enum FileType {
 }
 
 impl FileType {
-    fn to_mode(&self) -> u32 {
+    pub fn to_mode(&self) -> u32 {
         match self {
             FileType::Socket => S_IFSOCK,
             FileType::SymbolicLink => S_IFLNK,
@@ -448,10 +450,27 @@ impl FileType {
             FileType::FIFO => S_IFIFO,
         }
     }
+    pub fn new(value: u32) -> FileType {
+        if value & S_IFSOCK == S_IFSOCK {
+            FileType::Socket
+        } else if value & S_IFSOCK == S_IFLNK {
+            FileType::SymbolicLink
+        } else if value & S_IFSOCK == S_IFBLK {
+            FileType::BlockDevice
+        } else if value & S_IFSOCK == S_IFDIR {
+            FileType::Directory
+        } else if value & S_IFSOCK == S_IFCHR {
+            FileType::CharacterDevice
+        } else if value & S_IFSOCK == S_IFIFO {
+            FileType::FIFO
+        } else {
+            FileType::RegularFile
+        }
+    }
 }
 
 pub struct FuseDirectory {
-    pub name: String,
+    pub name: Vec<u8>,
     pub file_type: FileType,
     pub ino: u64,
 }

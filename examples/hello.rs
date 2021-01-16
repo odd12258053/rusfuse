@@ -8,8 +8,8 @@ struct HelloFs;
 const ENOENT: i32 = 2;
 const ENOSYS: i32 = 38;
 
-const FILE_NAME: &str = "hello";
-const TEXT: &str = "Hello World!\n";
+const FILE_NAME: &[u8] = b"hello";
+const TEXT: &[u8] = b"Hello World!\n";
 
 const TEST_DIR_ATTR: FuseAttr = FuseAttr {
     dev: 0,
@@ -50,7 +50,7 @@ const TEST_FILE_ATTR: FuseAttr = FuseAttr {
 };
 
 impl rusfuse::FileSystem for HelloFs {
-    fn lookup(&mut self, _ctx: &FuseCtx, parent: u64, name: &str) -> Result<FuseEntryParam, i32> {
+    fn lookup(&mut self, _ctx: &FuseCtx, parent: u64, name: &[u8]) -> Result<FuseEntryParam, i32> {
         println!("call lookup parent: {:?} name: {:?}", parent, name);
         if parent == 1 && name == FILE_NAME {
             Ok(rusfuse::FuseEntryParam::new(TEST_FILE_ATTR, 0, 10.0, 10.0))
@@ -80,10 +80,10 @@ impl rusfuse::FileSystem for HelloFs {
         _size: usize,
         _off: i64,
         _fi: &mut FuseFileInfo,
-    ) -> Result<&str, i32> {
+    ) -> Result<Vec<u8>, i32> {
         println!("call read");
         if ino == 2 {
-            Ok(TEXT)
+            Ok(TEXT.to_vec())
         } else {
             Err(ENOSYS)
         }
@@ -105,17 +105,17 @@ impl rusfuse::FileSystem for HelloFs {
         } else {
             Ok(vec![
                 FuseDirectory {
-                    name: ".".to_owned(),
+                    name: b".".to_vec(),
                     file_type: FileType::Directory,
                     ino: 1,
                 },
                 FuseDirectory {
-                    name: "..".to_owned(),
+                    name: b"..".to_vec(),
                     file_type: FileType::Directory,
                     ino: 1,
                 },
                 FuseDirectory {
-                    name: FILE_NAME.to_owned(),
+                    name: FILE_NAME.to_vec(),
                     file_type: FileType::RegularFile,
                     ino: 2,
                 },

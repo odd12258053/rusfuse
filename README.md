@@ -24,7 +24,7 @@ Write this in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rusfuse = "0.0.4"
+rusfuse = "0.0.9"
 ```
 
 Or, if you installed [cargo-edit](https://github.com/killercup/cargo-edit), you run this command:

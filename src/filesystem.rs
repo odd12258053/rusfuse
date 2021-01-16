@@ -12,10 +12,15 @@ pub trait FileSystem {
     fn destroy(&mut self) -> Result<(), i32> {
         Err(ENOSYS)
     }
-    fn lookup(&mut self, _ctx: &FuseCtx, _parent: u64, _name: &str) -> Result<FuseEntryParam, i32> {
+    fn lookup(
+        &mut self,
+        _ctx: &FuseCtx,
+        _parent: u64,
+        _name: &[u8],
+    ) -> Result<FuseEntryParam, i32> {
         Err(ENOSYS)
     }
-    fn forget(&mut self, _ctx: &FuseCtx, _ino: u64, _nlookup: u64) {}
+    fn forget(&mut self, _ctx: &FuseCtx, _forget: FuseForgetData) {}
     fn getattr(
         &mut self,
         _ctx: &FuseCtx,
@@ -34,14 +39,14 @@ pub trait FileSystem {
     ) -> Result<(FuseAttr, f64), i32> {
         Err(ENOSYS)
     }
-    fn readlink(&mut self, _ctx: &FuseCtx, _ino: u64) -> Result<&str, i32> {
+    fn readlink(&mut self, _ctx: &FuseCtx, _ino: u64) -> Result<Vec<u8>, i32> {
         Err(ENOSYS)
     }
     fn mknod(
         &mut self,
         _ctx: &FuseCtx,
         _parent: u64,
-        _name: &str,
+        _name: &[u8],
         _mode: u32,
         _rdev: u64,
     ) -> Result<FuseEntryParam, i32> {
@@ -51,23 +56,23 @@ pub trait FileSystem {
         &mut self,
         _ctx: &FuseCtx,
         _parent: u64,
-        _name: &str,
+        _name: &[u8],
         _mode: u32,
     ) -> Result<FuseEntryParam, i32> {
         Err(ENOSYS)
     }
-    fn unlink(&mut self, _ctx: &FuseCtx, _parent: u64, _name: &str) -> Result<(), i32> {
+    fn unlink(&mut self, _ctx: &FuseCtx, _parent: u64, _name: &[u8]) -> Result<(), i32> {
         Err(ENOSYS)
     }
-    fn rmdir(&mut self, _ctx: &FuseCtx, _parent: u64, _name: &str) -> Result<(), i32> {
+    fn rmdir(&mut self, _ctx: &FuseCtx, _parent: u64, _name: &[u8]) -> Result<(), i32> {
         Err(ENOSYS)
     }
     fn symlink(
         &mut self,
         _ctx: &FuseCtx,
-        _link: &str,
+        _link: &[u8],
         _parent: u64,
-        _name: &str,
+        _name: &[u8],
     ) -> Result<FuseEntryParam, i32> {
         Err(ENOSYS)
     }
@@ -75,9 +80,9 @@ pub trait FileSystem {
         &mut self,
         _ctx: &FuseCtx,
         _parent: u64,
-        _name: &str,
+        _name: &[u8],
         _newparent: u64,
-        _newname: &str,
+        _newname: &[u8],
         _flags: u16,
     ) -> Result<(), i32> {
         Err(ENOSYS)
@@ -87,16 +92,11 @@ pub trait FileSystem {
         _ctx: &FuseCtx,
         _ino: u64,
         _newparent: u64,
-        _newname: &str,
+        _newname: &[u8],
     ) -> Result<FuseEntryParam, i32> {
         Err(ENOSYS)
     }
-    fn open(
-        &mut self,
-        _ctx: &FuseCtx,
-        _ino: u64,
-        _fi: &mut FuseFileInfo,
-    ) -> Result<FuseFileInfo, i32> {
+    fn open(&mut self, _ctx: &FuseCtx, _ino: u64, _fi: FuseFileInfo) -> Result<FuseFileInfo, i32> {
         Err(ENOSYS)
     }
     fn read(
@@ -106,14 +106,14 @@ pub trait FileSystem {
         _size: usize,
         _off: i64,
         _fi: &mut FuseFileInfo,
-    ) -> Result<&str, i32> {
+    ) -> Result<Vec<u8>, i32> {
         Err(ENOSYS)
     }
     fn write(
         &mut self,
         _ctx: &FuseCtx,
         _ino: u64,
-        _buf: &str,
+        _buf: &[u8],
         _size: usize,
         _off: i64,
         _fi: &mut FuseFileInfo,
@@ -172,8 +172,8 @@ pub trait FileSystem {
         &mut self,
         _ctx: &FuseCtx,
         _ino: u64,
-        _name: &str,
-        _value: &str,
+        _name: &[u8],
+        _value: &[u8],
         _size: usize,
         _flags: i32,
     ) -> Result<(), i32> {
@@ -183,15 +183,15 @@ pub trait FileSystem {
         &mut self,
         _ctx: &FuseCtx,
         _ino: u64,
-        _name: &str,
+        _name: &[u8],
         _size: usize,
-    ) -> Result<&str, i32> {
+    ) -> Result<Vec<u8>, i32> {
         Err(ENOSYS)
     }
-    fn listxattr(&mut self, _ctx: &FuseCtx, _ino: u64, _size: usize) -> Result<&str, i32> {
+    fn listxattr(&mut self, _ctx: &FuseCtx, _ino: u64, _size: usize) -> Result<Vec<u8>, i32> {
         Err(ENOSYS)
     }
-    fn removexattr(&mut self, _ctx: &FuseCtx, _ino: u64, _name: &str) -> Result<(), i32> {
+    fn removexattr(&mut self, _ctx: &FuseCtx, _ino: u64, _name: &[u8]) -> Result<(), i32> {
         Err(ENOSYS)
     }
     fn access(&mut self, _ctx: &FuseCtx, _ino: u64, _mask: i32) -> Result<(), i32> {
@@ -201,7 +201,7 @@ pub trait FileSystem {
         &mut self,
         _ctx: &FuseCtx,
         _parent: u64,
-        _name: &str,
+        _name: &[u8],
         _mode: u32,
         _fi: &mut FuseFileInfo,
     ) -> Result<FuseEntryParam, i32> {
@@ -255,7 +255,7 @@ pub trait FileSystem {
         Err(ENOSYS)
     }
     // fn retrieve_reply(&mut self, _ctx: &FuseCtx) {}
-    fn forget_multi(&mut self, _ctx: &FuseCtx, _count: usize, _forgets: &mut FuseForgetData) {}
+    fn forget_multi(&mut self, _ctx: &FuseCtx, _forgets: Vec<FuseForgetData>) {}
     fn flock(
         &mut self,
         _ctx: &FuseCtx,
@@ -283,7 +283,7 @@ pub trait FileSystem {
         _size: usize,
         _off: i64,
         _fi: &mut FuseFileInfo,
-    ) -> Result<&str, i32> {
+    ) -> Result<Vec<u8>, i32> {
         Err(ENOSYS)
     }
     fn copy_file_range(
